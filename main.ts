@@ -872,7 +872,7 @@ const BUDGET_MID: Record<string, number> = {
 };
 const DEFAULT_BUDGET_MID = 8;
 /** How much quality (in weighted rating points) one expected refusal is worth spending to avoid. */
-const REFUSAL_PRICE = 200;
+const REFUSAL_PRICE = 600;
 /** The planned quality loss, in weighted rating points, must stay under this: repairs add more. */
 const DEFICIT_BUDGET = 480;
 /** No provider is planned more calls than this, whatever the pricing says. */
