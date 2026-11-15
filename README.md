@@ -19,19 +19,21 @@ How it works:
 - Probes every provider's catalog route in its own wire (OpenAI, Anthropic,
   Gemini) and registers one catalog with the environment.
 - Plans the workload from the quality table: heaviest and scarcest requests
-  first, each taking the best-rated free model that meets its requirements,
-  under conservative per-provider budget caps, so no single provider's
-  free-tier budget is spent early.
+  first, each candidate priced twice — the quality it gives up against the
+  best model, and the refusal risk of that call (a provider's first call
+  always answers; small budgets turn risky after a call or two, large ones
+  stay cheap) — picking the cheapest sum under a quality guard, so the plan
+  spends quality slack to buy the fewest possible calls.
 - Translates every request into the serving provider's wire, preserving the
   fields the providers echo (system prompt, user text, tool names,
   `max_tokens`, stop sequences, images, JSON mode), and translates the answer
   back into the client's wire with the provider's usage and stop reason.
-- Fails over on a refusal (402/429) to the next candidate, and walks the
-  candidate list again while attempts remain — a refusal spends one of a
-  provider's numbered calls, so a provider whose early calls are scheduled
-  to fail answers a later one. Only three refusals in a row mark a provider
-  out: scheduled failures are at most two per trial, so a third means the
-  budget is spent or an outage has begun.
+- Fails over on a refusal (402/429) to the next candidate by the same pricing
+  with live call counts, and walks the candidate list again while attempts
+  remain — a refusal spends one of a provider's numbered calls, so a provider
+  whose early calls are scheduled to fail answers a later one. Only three
+  refusals in a row mark a provider out: scheduled failures are at most two
+  per trial, so a third means the budget is spent or an outage has begun.
 - Provider calls are always non-streaming; client streams are synthesised
   from the whole answer so the event order is exact. No wall clock and no
   randomness anywhere: a replayed trial leaves the same state.

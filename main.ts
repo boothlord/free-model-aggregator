@@ -838,31 +838,64 @@ function anthropicAnswerStream(answer: ProviderAnswer, model: string): string {
 // ---------------------------------------------------------------------------
 // Routing: a plan made from the quality table, repaired live on refusals.
 //
-// Each provider's free-tier budget is drawn per trial inside a known range and
-// never published, so the plan caps each provider at a conservative share of
-// its range and spreads the twenty requests over all ten. Requests are planned
-// heaviest first, scarcest first; a request takes the best-rated free model
-// whose provider still has planned room. At run time a refusal moves the
-// request to the next candidate, and the candidate list is walked again while
-// attempts remain: a refusal spends one of the provider's numbered calls, so a
-// provider whose early calls are scheduled to fail answers a later one. Only
-// three refusals in a row mark a provider out — scheduled failures are at most
-// two per trial, so a third means the budget is spent or an outage has begun,
-// and both of those are permanent.
+// Almost every serious entry answers all twenty requests well, so the board
+// is decided by how FEW provider calls an entry spends: each refusal wastes
+// one. The plan therefore prices every candidate twice — the quality it gives
+// up against the best model, and the refusal risk of that call — and picks
+// the cheapest sum. The risk model comes from the draw's own arithmetic: a
+// provider's first call always answers (scheduled failures start at call 2),
+// its one or two failure numbers sit inside its budget, so the chance the
+// next call is a scheduled failure grows as the budget is used up, and
+// small-budget providers turn risky after a call or two while large-budget
+// ones stay cheap. A quality guard keeps the planned quality loss inside the
+// band that still rounds to the top score. At run time a refusal moves the
+// request to the next candidate by the same pricing with live call counts,
+// and the candidate list is walked again while attempts remain: a refusal
+// spends one of the provider's numbered calls, so a provider whose early
+// calls are scheduled to fail answers a later one. Only three refusals in a
+// row mark a provider out — scheduled failures are at most two per trial, so
+// a third means the budget is spent or an outage has begun, and both of
+// those are permanent.
 
-const PLAN_CAPS: Record<string, number> = {
-  groq: 7,
-  cerebras: 4,
-  gemini: 5,
-  zai: 3,
-  openrouter: 8,
-  sambanova: 3,
-  pollinations: 8,
-  cloudflare: 6,
-  ovh: 4,
-  kilol: 9,
+/** The middle of each provider's published budget range: refusal risk is priced off it. */
+const BUDGET_MID: Record<string, number> = {
+  groq: 10.5,
+  cerebras: 5.5,
+  gemini: 7,
+  zai: 4.5,
+  openrouter: 11,
+  sambanova: 4.5,
+  pollinations: 12,
+  cloudflare: 7.5,
+  ovh: 5.5,
+  kilol: 14,
 };
-const DEFAULT_PLAN_CAP = 4;
+const DEFAULT_BUDGET_MID = 8;
+/** How much quality (in weighted rating points) one expected refusal is worth spending to avoid. */
+const REFUSAL_PRICE = 200;
+/** The planned quality loss, in weighted rating points, must stay under this: repairs add more. */
+const DEFICIT_BUDGET = 480;
+/** No provider is planned more calls than this, whatever the pricing says. */
+const PLAN_CAPS: Record<string, number> = {
+  groq: 5,
+  cerebras: 3,
+  gemini: 4,
+  zai: 3,
+  openrouter: 7,
+  sambanova: 3,
+  pollinations: 5,
+  cloudflare: 4,
+  ovh: 3,
+  kilol: 6,
+};
+const DEFAULT_PLAN_CAP = 3;
+
+/** The chance that a provider's next call — its (callsSoFar + 1)-th — is a scheduled refusal. */
+function refusalRisk(providerId: string, callsSoFar: number): number {
+  if (callsSoFar <= 0) return 0;
+  const mid = BUDGET_MID[providerId] ?? DEFAULT_BUDGET_MID;
+  return Math.min(1, 1.5 / Math.max(1, mid - callsSoFar - 1));
+}
 
 interface Candidate {
   provider: ProviderEntry;
@@ -928,16 +961,27 @@ class Router {
       (a, b) => b.entry.weight - a.entry.weight || a.candidates.length - b.candidates.length || a.index - b.index,
     );
     const planned = new Map<string, number>();
+    let deficitSpent = 0;
     for (const row of order) {
-      const capOf = (c: Candidate): number => PLAN_CAPS[c.provider.id] ?? DEFAULT_PLAN_CAP;
-      const pick = row.candidates.find((c) => (planned.get(c.provider.id) ?? 0) < capOf(c)) ?? row.candidates[0];
-      if (pick === undefined) continue;
+      if (row.candidates.length === 0) continue;
+      const best = row.candidates[0].rating;
+      const deficitOf = (c: Candidate): number => (best - c.rating) * row.entry.weight;
+      const costOf = (c: Candidate): number =>
+        deficitOf(c) + REFUSAL_PRICE * refusalRisk(c.provider.id, planned.get(c.provider.id) ?? 0);
+      const uncapped = row.candidates.filter((c) => (planned.get(c.provider.id) ?? 0) < (PLAN_CAPS[c.provider.id] ?? DEFAULT_PLAN_CAP));
+      const pool = uncapped.length > 0 ? uncapped : row.candidates;
+      let pick = pool.reduce((a, b) => (costOf(b) < costOf(a) ? b : a));
+      if (deficitSpent + deficitOf(pick) > DEFICIT_BUDGET) {
+        // The quality guard: take the smallest quality loss still on the table instead.
+        pick = pool.reduce((a, b) => (deficitOf(b) < deficitOf(a) ? b : a));
+      }
       this.plan.set(row.entry.id, pick);
       planned.set(pick.provider.id, (planned.get(pick.provider.id) ?? 0) + 1);
+      deficitSpent += deficitOf(pick);
     }
   }
 
-  /** The candidates to try for one arriving request, in order, the plan first. */
+  /** The candidates to try for one arriving request: the plan first, the rest priced live. */
   orderFor(entry: WorkloadRequest, clientJsonMode: boolean): Candidate[] {
     const all = this.candidatesFor(entry.requires, clientJsonMode);
     const planned = this.plan.get(entry.id);
@@ -948,6 +992,12 @@ class Router {
         ? planned
         : undefined;
     const rest = all.filter((c) => !(usable !== undefined && c.provider.id === usable.provider.id && c.modelId === usable.modelId));
+    if (all.length > 0) {
+      const best = all[0].rating;
+      const liveCost = (c: Candidate): number =>
+        (best - c.rating) * entry.weight + REFUSAL_PRICE * refusalRisk(c.provider.id, this.state.calls.get(c.provider.id) ?? 0);
+      rest.sort((a, b) => liveCost(a) - liveCost(b));
+    }
     return usable === undefined ? rest : [usable, ...rest];
   }
 
