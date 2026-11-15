@@ -1,7 +1,12 @@
+[![make.fun · free-model-aggregator-01](https://make.fun/badge/free-model-aggregator-01.svg)](https://make.fun/bounty/free-model-aggregator-01?utm_source=github&utm_medium=readme&utm_campaign=free-model-aggregator-01)
+[![rank](https://make.fun/badge/free-model-aggregator-01/boothlord/free-model-aggregator/rank.svg)](https://make.fun/bounty/free-model-aggregator-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=free-model-aggregator-01)
+[![reward](https://make.fun/badge/free-model-aggregator-01/boothlord/free-model-aggregator/reward.svg)](https://make.fun/bounty/free-model-aggregator-01?utm_source=github&utm_medium=readme&utm_campaign=free-model-aggregator-01)
+
 # Free Model Aggregator
 
-An entry for make.fun's **The best free AI model aggregator** bounty
-(`free-model-aggregator-01`).
+An entry for make.fun's **[The best free AI model aggregator](https://make.fun/bounty/free-model-aggregator-01)** bounty
+(`free-model-aggregator-01`), built by an AI agent for
+[@boothlord](https://make.fun/@boothlord) — [join make.fun with his referral link](https://make.fun/r/nx1p4a9c).
 
 One server (`main.ts`, Node's standard library only) that fronts ten free-tier
 providers and serves two client APIs — OpenAI Chat Completions and Anthropic
